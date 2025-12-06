@@ -1,0 +1,291 @@
+# PIPELINE DEFINITION
+# Name: boston-housing-mlops-pipeline
+# Description: End-to-end pipeline
+# Outputs:
+#    model-evaluation-metrics: system.Metrics
+components:
+  comp-data-extraction:
+    executorLabel: exec-data-extraction
+    outputDefinitions:
+      artifacts:
+        output_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-data-preprocessing:
+    executorLabel: exec-data-preprocessing
+    inputDefinitions:
+      artifacts:
+        input_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        scaler_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        test_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        train_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-model-evaluation:
+    executorLabel: exec-model-evaluation
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        test_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+  comp-model-training:
+    executorLabel: exec-model-training
+    inputDefinitions:
+      artifacts:
+        train_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-data-extraction:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - data_extraction
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.4.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'dvc'\
+          \ 'scikit-learn' 'joblib' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef data_extraction(output_data: Output[Dataset]):\n    import pandas\
+          \ as pd\n    df = pd.read_csv('data/raw/boston_housing.csv')\n    df.to_csv(output_data.path,\
+          \ index=False)\n    print(\"Data extracted:\", df.shape)\n\n"
+        image: python:3.7
+    exec-data-preprocessing:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - data_preprocessing
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.4.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef data_preprocessing(\n    input_data: Input[Dataset],\n    train_data:\
+          \ Output[Dataset],\n    test_data: Output[Dataset],\n    scaler_model: Output[Model]\n\
+          ):\n    import pandas as pd\n    from sklearn.model_selection import train_test_split\n\
+          \    from sklearn.preprocessing import StandardScaler\n    import joblib\n\
+          \n    df = pd.read_csv(input_data.path)\n    X = df.drop('PRICE', axis=1)\n\
+          \    y = df['PRICE']\n\n    X_train, X_test, y_train, y_test = train_test_split(\n\
+          \        X, y, test_size=0.2, random_state=42\n    )\n\n    scaler = StandardScaler()\n\
+          \    X_train_scaled = scaler.fit_transform(X_train)\n    X_test_scaled =\
+          \ scaler.transform(X_test)\n\n    train_df = pd.DataFrame(X_train_scaled,\
+          \ columns=X.columns)\n    train_df['PRICE'] = y_train.values\n    train_df.to_csv(train_data.path,\
+          \ index=False)\n\n    test_df = pd.DataFrame(X_test_scaled, columns=X.columns)\n\
+          \    test_df['PRICE'] = y_test.values\n    test_df.to_csv(test_data.path,\
+          \ index=False)\n\n    joblib.dump(scaler, scaler_model.path)\n    print(\"\
+          Preprocessing done\")\n\n"
+        image: python:3.7
+    exec-model-evaluation:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - model_evaluation
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.4.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef model_evaluation(test_data: Input[Dataset], model: Input[Model],\
+          \ metrics: Output[Metrics]):\n    import pandas as pd\n    import joblib\n\
+          \    from sklearn.metrics import mean_squared_error, r2_score\n\n    df\
+          \ = pd.read_csv(test_data.path)\n    X_test = df.drop('PRICE', axis=1)\n\
+          \    y_test = df['PRICE']\n\n    rf = joblib.load(model.path)\n    y_pred\
+          \ = rf.predict(X_test)\n\n    mse = mean_squared_error(y_test, y_pred)\n\
+          \    r2 = r2_score(y_test, y_pred)\n\n    metrics.log_metric(\"mse\", mse)\n\
+          \    metrics.log_metric(\"r2\", r2)\n    print(f\"MSE: {mse}, R2: {r2}\"\
+          )\n\n"
+        image: python:3.7
+    exec-model-training:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - model_training
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.4.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef model_training(train_data: Input[Dataset], model: Output[Model]):\n\
+          \    import pandas as pd\n    from sklearn.ensemble import RandomForestRegressor\n\
+          \    import joblib\n\n    df = pd.read_csv(train_data.path)\n    X_train\
+          \ = df.drop('PRICE', axis=1)\n    y_train = df['PRICE']\n\n    rf = RandomForestRegressor(n_estimators=100,\
+          \ random_state=42)\n    rf.fit(X_train, y_train)\n    joblib.dump(rf, model.path)\n\
+          \    print(\"Model trained\")\n\n"
+        image: python:3.7
+pipelineInfo:
+  description: End-to-end pipeline
+  name: boston-housing-mlops-pipeline
+root:
+  dag:
+    outputs:
+      artifacts:
+        model-evaluation-metrics:
+          artifactSelectors:
+          - outputArtifactKey: metrics
+            producerSubtask: model-evaluation
+    tasks:
+      data-extraction:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-data-extraction
+        taskInfo:
+          name: data-extraction
+      data-preprocessing:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-data-preprocessing
+        dependentTasks:
+        - data-extraction
+        inputs:
+          artifacts:
+            input_data:
+              taskOutputArtifact:
+                outputArtifactKey: output_data
+                producerTask: data-extraction
+        taskInfo:
+          name: data-preprocessing
+      model-evaluation:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-model-evaluation
+        dependentTasks:
+        - data-preprocessing
+        - model-training
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: model-training
+            test_data:
+              taskOutputArtifact:
+                outputArtifactKey: test_data
+                producerTask: data-preprocessing
+        taskInfo:
+          name: model-evaluation
+      model-training:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-model-training
+        dependentTasks:
+        - data-preprocessing
+        inputs:
+          artifacts:
+            train_data:
+              taskOutputArtifact:
+                outputArtifactKey: train_data
+                producerTask: data-preprocessing
+        taskInfo:
+          name: model-training
+  outputDefinitions:
+    artifacts:
+      model-evaluation-metrics:
+        artifactType:
+          schemaTitle: system.Metrics
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.4.0

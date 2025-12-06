@@ -1,0 +1,72 @@
+# PIPELINE DEFINITION
+# Name: data-extraction
+# Outputs:
+#    output_data: system.Dataset
+components:
+  comp-data-extraction:
+    executorLabel: exec-data-extraction
+    outputDefinitions:
+      artifacts:
+        output_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-data-extraction:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - data_extraction
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.4.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'dvc'\
+          \ 'scikit-learn' 'joblib' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef data_extraction(output_data: Output[Dataset]):\n    import pandas\
+          \ as pd\n    df = pd.read_csv('data/raw/boston_housing.csv')\n    df.to_csv(output_data.path,\
+          \ index=False)\n    print(\"Data extracted:\", df.shape)\n\n"
+        image: python:3.7
+pipelineInfo:
+  name: data-extraction
+root:
+  dag:
+    outputs:
+      artifacts:
+        output_data:
+          artifactSelectors:
+          - outputArtifactKey: output_data
+            producerSubtask: data-extraction
+    tasks:
+      data-extraction:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-data-extraction
+        taskInfo:
+          name: data-extraction
+  outputDefinitions:
+    artifacts:
+      output_data:
+        artifactType:
+          schemaTitle: system.Dataset
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.4.0
